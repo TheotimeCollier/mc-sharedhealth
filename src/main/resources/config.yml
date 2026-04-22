@@ -1,0 +1,38 @@
+features:
+  shared-health: true
+  shared-hunger: true
+  shared-absorption: true
+  shared-potions: true
+  shared-death: true
+
+health:
+  prevent-stacked-regen: true
+
+hunger:
+  split-sprint-jump-exhaustion: true
+
+feedback:
+  damage-action-bar: true
+  damage-hurt-animation: true
+  damage-sound: true
+
+messages:
+  hide-vanilla-death-message: true
+  hide-vanilla-join-message: true
+  hide-vanilla-quit-message: true
+  broadcast-shared-death: true
+  broadcast-join: true
+  broadcast-quit: true
+
+shared-death:
+  wipe-inventory: true
+  wipe-ender-chest: true
+  clear-drops: true
+  clear-ground-items: true
+  reset-shared-hunger-to-full: true
+
+startup:
+  sync-online-players-on-enable: true
+
+storage:
+  autosave-interval-seconds: 60

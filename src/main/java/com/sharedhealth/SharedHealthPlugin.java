@@ -76,12 +76,44 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     private long sharedDeathCounter;
     private final Map<UUID, Long> playerDeathSync = new HashMap<>();
 
+    private boolean cfgSharedHealth;
+    private boolean cfgSharedHunger;
+    private boolean cfgSharedAbsorption;
+    private boolean cfgSharedPotions;
+    private boolean cfgSharedDeath;
+    private boolean cfgPreventStackedRegen;
+    private boolean cfgSplitSprintJumpExhaustion;
+    private boolean cfgDamageActionBar;
+    private boolean cfgDamageHurtAnimation;
+    private boolean cfgDamageSound;
+    private boolean cfgHideVanillaDeathMessage;
+    private boolean cfgHideVanillaJoinMessage;
+    private boolean cfgHideVanillaQuitMessage;
+    private boolean cfgBroadcastSharedDeath;
+    private boolean cfgBroadcastJoin;
+    private boolean cfgBroadcastQuit;
+    private boolean cfgWipeInventoryOnSharedDeath;
+    private boolean cfgWipeEnderChestOnSharedDeath;
+    private boolean cfgClearDropsOnSharedDeath;
+    private boolean cfgClearGroundItemsOnSharedDeath;
+    private boolean cfgResetSharedHungerOnSharedDeath;
+    private boolean cfgSyncOnlinePlayersOnEnable;
+    private long cfgAutosaveIntervalTicks;
+
     @Override
     public void onEnable() {
+        saveDefaultConfig();
+        reloadConfig();
+        loadRuntimeConfig();
         loadSharedData();
         getServer().getPluginManager().registerEvents(this, this);
-        Bukkit.getScheduler().runTask(this, this::initializeFromOnlinePlayers);
-        autosaveTask = Bukkit.getScheduler().runTaskTimer(this, this::saveSharedData, 20L * 60L, 20L * 60L);
+        if (cfgSyncOnlinePlayersOnEnable) {
+            Bukkit.getScheduler().runTask(this, this::initializeFromOnlinePlayers);
+        }
+        if (cfgAutosaveIntervalTicks > 0L) {
+            autosaveTask = Bukkit.getScheduler()
+                    .runTaskTimer(this, this::saveSharedData, cfgAutosaveIntervalTicks, cfgAutosaveIntervalTicks);
+        }
     }
 
     @Override
@@ -101,6 +133,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
         }
 
         if (syncingHealth || massKillInProgress) {
+            return;
+        }
+
+        if (!cfgSharedHealth && !cfgSharedAbsorption) {
             return;
         }
 
@@ -130,8 +166,14 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!cfgSharedHealth) {
+            return;
+        }
+
         Player player = (Player) entity;
-        if (isNonStackingSharedRegenReason(event.getRegainReason()) && !isNaturalRegenController(player)) {
+        if (cfgPreventStackedRegen
+                && isNonStackingSharedRegenReason(event.getRegainReason())
+                && !isNaturalRegenController(player)) {
             event.setCancelled(true);
         }
     }
@@ -147,9 +189,13 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!cfgSharedHealth) {
+            return;
+        }
+
         Player player = (Player) entity;
         EntityRegainHealthEvent.RegainReason reason = event.getRegainReason();
-        if (isNonStackingSharedRegenReason(reason) && !isNaturalRegenController(player)) {
+        if (cfgPreventStackedRegen && isNonStackingSharedRegenReason(reason) && !isNaturalRegenController(player)) {
             return;
         }
 
@@ -164,7 +210,7 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             updateSharedHealth(healedHealth);
             applySharedHealthToAll(sharedHealth);
 
-            if (reason == EntityRegainHealthEvent.RegainReason.SATIATED) {
+            if (cfgSharedHunger && reason == EntityRegainHealthEvent.RegainReason.SATIATED) {
                 syncHungerFromPlayer(player);
             }
         });
@@ -184,6 +230,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
         }
 
         if (syncingPotionEffects) {
+            return;
+        }
+
+        if (!cfgSharedPotions) {
             return;
         }
 
@@ -209,14 +259,22 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!cfgSharedHealth && !cfgSharedPotions && !cfgSharedAbsorption) {
+            return;
+        }
+
         Player source = (Player) entity;
         Bukkit.getScheduler().runTask(this, () -> {
             if (!source.isOnline() || source.isDead()) {
                 return;
             }
 
-            syncSharedHealthFromDamagedPlayer(source);
-            syncSharedPotionEffectsFromSource(source);
+            if (cfgSharedHealth || cfgSharedAbsorption) {
+                syncSharedHealthFromDamagedPlayer(source);
+            }
+            if (cfgSharedPotions) {
+                syncSharedPotionEffectsFromSource(source);
+            }
         });
     }
 
@@ -224,6 +282,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     public void onEntityExhaustion(EntityExhaustionEvent event) {
         Entity entity = event.getEntity();
         if (!(entity instanceof Player)) {
+            return;
+        }
+
+        if (!cfgSharedHunger || !cfgSplitSprintJumpExhaustion) {
             return;
         }
 
@@ -245,39 +307,75 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!cfgSharedHunger) {
+            return;
+        }
+
         Player player = (Player) entity;
         Bukkit.getScheduler().runTask(this, () -> syncHungerFromPlayer(player));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onPlayerDeath(PlayerDeathEvent event) {
-        event.deathMessage(null);
+        if (cfgHideVanillaDeathMessage) {
+            event.deathMessage(null);
+        }
 
-        if (massKillInProgress) {
-            wipePlayerInventory(event.getPlayer());
-            event.getDrops().clear();
+        if (!cfgSharedDeath) {
             return;
         }
 
-        broadcastSharedKilledChat(event.getPlayer().getName());
-        wipeAllOnlineInventories();
-        wipeAllOnlineEnderChests();
-        event.getDrops().clear();
-        clearAllGroundItems();
-        Bukkit.getScheduler().runTask(this, this::clearAllGroundItems);
+        if (massKillInProgress) {
+            if (cfgWipeInventoryOnSharedDeath) {
+                wipePlayerInventory(event.getPlayer());
+            }
+            if (cfgClearDropsOnSharedDeath) {
+                event.getDrops().clear();
+            }
+            return;
+        }
+
+        if (cfgBroadcastSharedDeath) {
+            broadcastSharedKilledChat(event.getPlayer().getName());
+        }
+        if (cfgWipeInventoryOnSharedDeath) {
+            wipeAllOnlineInventories();
+        }
+        if (cfgWipeEnderChestOnSharedDeath) {
+            wipeAllOnlineEnderChests();
+        }
+        if (cfgClearDropsOnSharedDeath) {
+            event.getDrops().clear();
+        }
+        if (cfgClearGroundItemsOnSharedDeath) {
+            clearAllGroundItems();
+            Bukkit.getScheduler().runTask(this, this::clearAllGroundItems);
+        }
 
         recordSharedDeathForOnlinePlayers();
-        updateSharedHealth(0.0D);
-        updateSharedAbsorption(0.0D);
-        updateSharedHunger(20);
-        setSharedPotionEffects(null, null, null);
+        if (cfgSharedHealth) {
+            updateSharedHealth(0.0D);
+        }
+        if (cfgSharedAbsorption) {
+            updateSharedAbsorption(0.0D);
+        }
+        if (cfgSharedHunger && cfgResetSharedHungerOnSharedDeath) {
+            updateSharedHunger(20);
+        }
+        if (cfgSharedPotions) {
+            setSharedPotionEffects(null, null, null);
+        }
         killAllPlayers();
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
-        event.joinMessage(null);
-        broadcastJoinChat(event.getPlayer().getName());
+        if (cfgHideVanillaJoinMessage) {
+            event.joinMessage(null);
+        }
+        if (cfgBroadcastJoin) {
+            broadcastJoinChat(event.getPlayer().getName());
+        }
         syncJoiningPlayerToSharedState(event.getPlayer());
     }
 
@@ -285,15 +383,23 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     public void onPlayerRespawn(PlayerRespawnEvent event) {
         Player respawned = event.getPlayer();
         Bukkit.getScheduler().runTask(this, () -> {
-            syncPlayerToSharedState(respawned);
-            markPlayerDeathSynced(respawned.getUniqueId(), sharedDeathCounter);
+            if (hasAnySharedSyncFeatureEnabled()) {
+                syncPlayerToSharedState(respawned);
+            }
+            if (cfgSharedDeath) {
+                markPlayerDeathSynced(respawned.getUniqueId(), sharedDeathCounter);
+            }
         });
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerQuit(PlayerQuitEvent event) {
-        event.quitMessage(null);
-        broadcastQuitChat(event.getPlayer().getName());
+        if (cfgHideVanillaQuitMessage) {
+            event.quitMessage(null);
+        }
+        if (cfgBroadcastQuit) {
+            broadcastQuitChat(event.getPlayer().getName());
+        }
         Bukkit.getScheduler().runTask(this, () -> {
             if (Bukkit.getOnlinePlayers().isEmpty()) {
                 saveSharedData();
@@ -304,15 +410,15 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     private void initializeFromOnlinePlayers() {
         Collection<? extends Player> onlinePlayers = Bukkit.getOnlinePlayers();
         if (onlinePlayers.isEmpty()) {
-            if (!sharedHealthInitialized) {
+            if (cfgSharedHealth && !sharedHealthInitialized) {
                 updateSharedHealth(20.0D);
             }
 
-            if (!sharedHungerInitialized) {
+            if (cfgSharedHunger && !sharedHungerInitialized) {
                 updateSharedHunger(20);
             }
 
-            if (!sharedAbsorptionInitialized) {
+            if (cfgSharedAbsorption && !sharedAbsorptionInitialized) {
                 updateSharedAbsorption(0.0D);
             }
 
@@ -320,36 +426,44 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        double lowestAliveHealth = findLowestAliveHealth(null);
-        if (lowestAliveHealth >= 0.0D) {
-            updateSharedHealth(lowestAliveHealth);
-        } else if (!sharedHealthInitialized || sharedHealth <= 0.0D) {
-            updateSharedHealth(resolvePlayerMaxHealth(onlinePlayers.iterator().next()));
+        if (cfgSharedHealth) {
+            double lowestAliveHealth = findLowestAliveHealth(null);
+            if (lowestAliveHealth >= 0.0D) {
+                updateSharedHealth(lowestAliveHealth);
+            } else if (!sharedHealthInitialized || sharedHealth <= 0.0D) {
+                updateSharedHealth(resolvePlayerMaxHealth(onlinePlayers.iterator().next()));
+            }
+            applySharedHealthToAll(sharedHealth);
         }
-        applySharedHealthToAll(sharedHealth);
 
-        Player lowestFoodPlayer = findPlayerWithLowestFood(null);
-        if (lowestFoodPlayer != null) {
-            updateSharedHunger(lowestFoodPlayer.getFoodLevel());
-        } else if (!sharedHungerInitialized) {
-            Player fallback = onlinePlayers.iterator().next();
-            updateSharedHunger(fallback.getFoodLevel());
+        if (cfgSharedHunger) {
+            Player lowestFoodPlayer = findPlayerWithLowestFood(null);
+            if (lowestFoodPlayer != null) {
+                updateSharedHunger(lowestFoodPlayer.getFoodLevel());
+            } else if (!sharedHungerInitialized) {
+                Player fallback = onlinePlayers.iterator().next();
+                updateSharedHunger(fallback.getFoodLevel());
+            }
+            applySharedHungerToAll();
         }
-        applySharedHungerToAll();
 
-        setSharedPotionEffects(
-                findAnyPotionEffect(PotionEffectType.REGENERATION),
-                findAnyPotionEffect(PotionEffectType.HEALTH_BOOST),
-                findAnyPotionEffect(PotionEffectType.ABSORPTION));
-        applySharedPotionEffects();
-
-        double lowestAliveAbsorption = findLowestAliveAbsorption(null);
-        if (lowestAliveAbsorption >= 0.0D) {
-            updateSharedAbsorption(lowestAliveAbsorption);
-        } else if (!sharedAbsorptionInitialized) {
-            updateSharedAbsorption(0.0D);
+        if (cfgSharedPotions) {
+            setSharedPotionEffects(
+                    findAnyPotionEffect(PotionEffectType.REGENERATION),
+                    findAnyPotionEffect(PotionEffectType.HEALTH_BOOST),
+                    findAnyPotionEffect(PotionEffectType.ABSORPTION));
+            applySharedPotionEffects();
         }
-        applySharedAbsorptionToAll();
+
+        if (cfgSharedAbsorption) {
+            double lowestAliveAbsorption = findLowestAliveAbsorption(null);
+            if (lowestAliveAbsorption >= 0.0D) {
+                updateSharedAbsorption(lowestAliveAbsorption);
+            } else if (!sharedAbsorptionInitialized) {
+                updateSharedAbsorption(0.0D);
+            }
+            applySharedAbsorptionToAll();
+        }
     }
 
     private void syncPlayerToSharedState(Player player) {
@@ -357,10 +471,18 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        syncPlayerToSharedPotionEffects(player);
-        syncPlayerToSharedHealth(player);
-        syncPlayerToSharedAbsorption(player);
-        syncPlayerToSharedHunger(player);
+        if (cfgSharedPotions) {
+            syncPlayerToSharedPotionEffects(player);
+        }
+        if (cfgSharedHealth) {
+            syncPlayerToSharedHealth(player);
+        }
+        if (cfgSharedAbsorption) {
+            syncPlayerToSharedAbsorption(player);
+        }
+        if (cfgSharedHunger) {
+            syncPlayerToSharedHunger(player);
+        }
     }
 
     private void syncJoiningPlayerToSharedState(Player player) {
@@ -368,9 +490,13 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        applyMissedSharedDeathStateIfNeeded(player);
+        if (cfgSharedDeath) {
+            applyMissedSharedDeathStateIfNeeded(player);
+        }
         syncPlayerToSharedState(player);
-        markPlayerDeathSynced(player.getUniqueId(), sharedDeathCounter);
+        if (cfgSharedDeath) {
+            markPlayerDeathSynced(player.getUniqueId(), sharedDeathCounter);
+        }
     }
 
     private void syncPlayerToSharedHealth(Player player) {
@@ -399,6 +525,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void syncPlayerToSharedHunger(Player player) {
+        if (!cfgSharedHunger) {
+            return;
+        }
+
         ensureSharedHungerInitialized(player);
 
         int targetFood = sharedFoodLevel;
@@ -418,6 +548,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void syncPlayerToSharedAbsorption(Player player) {
+        if (!cfgSharedAbsorption) {
+            return;
+        }
+
         ensureSharedAbsorptionInitialized(player);
 
         double targetAbsorption = sharedAbsorption;
@@ -435,6 +569,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!cfgSharedHunger) {
+            return;
+        }
+
         updateSharedHunger(player.getFoodLevel());
         applySharedHungerToAll();
     }
@@ -449,41 +587,77 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!cfgSharedHealth && !cfgSharedAbsorption) {
+            return;
+        }
+
         if (massKillInProgress) {
             return;
         }
 
-        if (source.isDead() || source.getHealth() <= 0.0D) {
+        if (cfgSharedHealth && (source.isDead() || source.getHealth() <= 0.0D)) {
             if (sharedHealthInitialized && sharedHealth <= EPSILON) {
                 return;
             }
             updateSharedHealth(0.0D);
-            updateSharedAbsorption(0.0D);
+            if (cfgSharedAbsorption) {
+                updateSharedAbsorption(0.0D);
+            }
             killAllPlayers();
             return;
         }
 
-        ensureSharedHealthInitialized(source);
-        ensureSharedAbsorptionInitialized(source);
-        double maxSharedHealth = resolveSharedHealthCap(source);
-        double newSharedHealth = Math.min(source.getHealth(), maxSharedHealth);
-        double previousSharedHealth = sharedHealth;
-        double maxSharedAbsorption = resolveSharedAbsorptionCap(source);
-        double newSharedAbsorption = Math.min(source.getAbsorptionAmount(), maxSharedAbsorption);
-        double previousSharedAbsorption = sharedAbsorption;
-        updateSharedHealth(newSharedHealth);
-        updateSharedAbsorption(newSharedAbsorption);
-        double sharedHealthLoss = Math.max(0.0D, previousSharedHealth - newSharedHealth);
-        double sharedAbsorptionLoss = Math.max(0.0D, previousSharedAbsorption - newSharedAbsorption);
+        if (cfgSharedHealth) {
+            ensureSharedHealthInitialized(source);
+        }
+        if (cfgSharedAbsorption) {
+            ensureSharedAbsorptionInitialized(source);
+        }
 
-        double sharedLoss = computeSharedLoss(
-                source,
-                sourceHealthBeforeDamage,
-                sourceAbsorptionBeforeDamage,
-                previousSharedHealth,
-                previousSharedAbsorption,
-                newSharedHealth,
-                newSharedAbsorption);
+        double newSharedHealth = sharedHealth;
+        double previousSharedHealth = sharedHealth;
+        if (cfgSharedHealth) {
+            double maxSharedHealth = resolveSharedHealthCap(source);
+            newSharedHealth = Math.min(source.getHealth(), maxSharedHealth);
+            updateSharedHealth(newSharedHealth);
+        }
+
+        double newSharedAbsorption = sharedAbsorption;
+        double previousSharedAbsorption = sharedAbsorption;
+        if (cfgSharedAbsorption) {
+            double maxSharedAbsorption = resolveSharedAbsorptionCap(source);
+            newSharedAbsorption = Math.min(source.getAbsorptionAmount(), maxSharedAbsorption);
+            updateSharedAbsorption(newSharedAbsorption);
+        }
+
+        double sharedHealthLoss =
+                cfgSharedHealth ? Math.max(0.0D, previousSharedHealth - newSharedHealth) : 0.0D;
+        double sharedAbsorptionLoss =
+                cfgSharedAbsorption ? Math.max(0.0D, previousSharedAbsorption - newSharedAbsorption) : 0.0D;
+
+        double sharedLoss;
+        if (cfgSharedHealth && cfgSharedAbsorption) {
+            sharedLoss = computeSharedLoss(
+                    source,
+                    sourceHealthBeforeDamage,
+                    sourceAbsorptionBeforeDamage,
+                    previousSharedHealth,
+                    previousSharedAbsorption,
+                    newSharedHealth,
+                    newSharedAbsorption);
+        } else if (cfgSharedHealth) {
+            if (!Double.isNaN(sourceHealthBeforeDamage)) {
+                sharedLoss = Math.max(0.0D, sourceHealthBeforeDamage - source.getHealth());
+            } else {
+                sharedLoss = sharedHealthLoss;
+            }
+        } else {
+            if (!Double.isNaN(sourceAbsorptionBeforeDamage)) {
+                sharedLoss = Math.max(0.0D, sourceAbsorptionBeforeDamage - source.getAbsorptionAmount());
+            } else {
+                sharedLoss = sharedAbsorptionLoss;
+            }
+        }
         if (sharedLoss <= EPSILON) {
             return;
         }
@@ -498,16 +672,26 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!cfgSharedPotions) {
+            return;
+        }
+
         setSharedPotionEffects(
                 source.getPotionEffect(PotionEffectType.REGENERATION),
                 source.getPotionEffect(PotionEffectType.HEALTH_BOOST),
                 source.getPotionEffect(PotionEffectType.ABSORPTION));
         applySharedPotionEffects();
-        syncSharedAbsorptionFromPlayer(source);
+        if (cfgSharedAbsorption) {
+            syncSharedAbsorptionFromPlayer(source);
+        }
     }
 
     private void syncSharedAbsorptionFromPlayer(Player source) {
         if (!source.isOnline()) {
+            return;
+        }
+
+        if (!cfgSharedAbsorption) {
             return;
         }
 
@@ -539,6 +723,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void applySharedHealthToAll(double health) {
+        if (!cfgSharedHealth) {
+            return;
+        }
+
         syncingHealth = true;
         try {
             for (Player online : Bukkit.getOnlinePlayers()) {
@@ -560,21 +748,30 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
 
     private void applySharedStateToOthers(
             Player source, double health, double absorptionAmount, boolean showDamageFeedback) {
-        syncingHealth = true;
+        if (!cfgSharedHealth && !cfgSharedAbsorption) {
+            return;
+        }
+
+        syncingHealth = cfgSharedHealth;
         try {
             for (Player online : Bukkit.getOnlinePlayers()) {
                 if (online.isDead() || online.getUniqueId().equals(source.getUniqueId())) {
                     continue;
                 }
 
-                double clamped = clampHealthForPlayer(online, health);
-                if (clamped <= 0.0D) {
-                    online.setHealth(0.0D);
-                    continue;
+                if (cfgSharedHealth) {
+                    double clamped = clampHealthForPlayer(online, health);
+                    if (clamped <= 0.0D) {
+                        online.setHealth(0.0D);
+                        continue;
+                    }
+
+                    online.setHealth(clamped);
                 }
 
-                online.setHealth(clamped);
-                online.setAbsorptionAmount(clampAbsorptionForPlayer(online, absorptionAmount));
+                if (cfgSharedAbsorption) {
+                    online.setAbsorptionAmount(clampAbsorptionForPlayer(online, absorptionAmount));
+                }
                 if (showDamageFeedback) {
                     playDamageFeedback(online);
                 }
@@ -585,6 +782,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void applySharedHungerToAll() {
+        if (!cfgSharedHunger) {
+            return;
+        }
+
         syncingHunger = true;
         try {
             for (Player online : Bukkit.getOnlinePlayers()) {
@@ -596,6 +797,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void applySharedAbsorptionToAll() {
+        if (!cfgSharedAbsorption) {
+            return;
+        }
+
         for (Player online : Bukkit.getOnlinePlayers()) {
             if (online.isDead()) {
                 continue;
@@ -606,6 +811,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void applySharedPotionEffects() {
+        if (!cfgSharedPotions) {
+            return;
+        }
+
         syncingPotionEffects = true;
         try {
             for (Player online : Bukkit.getOnlinePlayers()) {
@@ -646,8 +855,12 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        wipePlayerInventory(player);
-        player.getEnderChest().clear();
+        if (cfgWipeInventoryOnSharedDeath) {
+            wipePlayerInventory(player);
+        }
+        if (cfgWipeEnderChestOnSharedDeath) {
+            player.getEnderChest().clear();
+        }
     }
 
     private void recordSharedDeathForOnlinePlayers() {
@@ -697,11 +910,19 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void playDamageFeedback(Player player) {
-        player.sendHurtAnimation(0.0F);
-        player.playSound(player, Sound.ENTITY_PLAYER_HURT, 1.0F, 1.0F);
+        if (cfgDamageHurtAnimation) {
+            player.sendHurtAnimation(0.0F);
+        }
+        if (cfgDamageSound) {
+            player.playSound(player, Sound.ENTITY_PLAYER_HURT, 1.0F, 1.0F);
+        }
     }
 
     private void sendSharedDamageActionBar(String playerName, double sharedDamage, boolean absorptionOnlyLoss) {
+        if (!cfgDamageActionBar) {
+            return;
+        }
+
         String amountText = formatHeartsAmount(sharedDamage);
         NamedTextColor heartColor = absorptionOnlyLoss ? NamedTextColor.YELLOW : NamedTextColor.RED;
         Component message = Component.empty()
@@ -827,6 +1048,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void syncPlayerToSharedPotionEffects(Player player) {
+        if (!cfgSharedPotions) {
+            return;
+        }
+
         syncingPotionEffects = true;
         try {
             applySharedPotionToPlayer(player, PotionEffectType.REGENERATION, sharedRegenEffect);
@@ -999,6 +1224,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void clampSharedHealthToCurrentCap() {
+        if (!cfgSharedHealth) {
+            return;
+        }
+
         if (!sharedHealthInitialized || sharedHealth <= 0.0D) {
             return;
         }
@@ -1011,6 +1240,10 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
     }
 
     private void clampSharedAbsorptionToCurrentCap() {
+        if (!cfgSharedAbsorption) {
+            return;
+        }
+
         if (!sharedAbsorptionInitialized || sharedAbsorption <= 0.0D) {
             return;
         }
@@ -1097,6 +1330,46 @@ public final class SharedHealthPlugin extends JavaPlugin implements Listener {
         }
 
         return Math.max(0.0D, player.getAttribute(Attribute.MAX_ABSORPTION).getValue());
+    }
+
+    private void loadRuntimeConfig() {
+        FileConfiguration config = getConfig();
+
+        cfgSharedHealth = config.getBoolean("features.shared-health", true);
+        cfgSharedHunger = config.getBoolean("features.shared-hunger", true);
+        cfgSharedAbsorption = config.getBoolean("features.shared-absorption", true);
+        cfgSharedPotions = config.getBoolean("features.shared-potions", true);
+        cfgSharedDeath = config.getBoolean("features.shared-death", true);
+
+        cfgPreventStackedRegen = config.getBoolean("health.prevent-stacked-regen", true);
+
+        cfgSplitSprintJumpExhaustion = config.getBoolean("hunger.split-sprint-jump-exhaustion", true);
+
+        cfgDamageActionBar = config.getBoolean("feedback.damage-action-bar", true);
+        cfgDamageHurtAnimation = config.getBoolean("feedback.damage-hurt-animation", true);
+        cfgDamageSound = config.getBoolean("feedback.damage-sound", true);
+
+        cfgHideVanillaDeathMessage = config.getBoolean("messages.hide-vanilla-death-message", true);
+        cfgHideVanillaJoinMessage = config.getBoolean("messages.hide-vanilla-join-message", true);
+        cfgHideVanillaQuitMessage = config.getBoolean("messages.hide-vanilla-quit-message", true);
+        cfgBroadcastSharedDeath = config.getBoolean("messages.broadcast-shared-death", true);
+        cfgBroadcastJoin = config.getBoolean("messages.broadcast-join", true);
+        cfgBroadcastQuit = config.getBoolean("messages.broadcast-quit", true);
+
+        cfgWipeInventoryOnSharedDeath = config.getBoolean("shared-death.wipe-inventory", true);
+        cfgWipeEnderChestOnSharedDeath = config.getBoolean("shared-death.wipe-ender-chest", true);
+        cfgClearDropsOnSharedDeath = config.getBoolean("shared-death.clear-drops", true);
+        cfgClearGroundItemsOnSharedDeath = config.getBoolean("shared-death.clear-ground-items", true);
+        cfgResetSharedHungerOnSharedDeath = config.getBoolean("shared-death.reset-shared-hunger-to-full", true);
+
+        cfgSyncOnlinePlayersOnEnable = config.getBoolean("startup.sync-online-players-on-enable", true);
+
+        long autosaveIntervalSeconds = config.getLong("storage.autosave-interval-seconds", 60L);
+        cfgAutosaveIntervalTicks = autosaveIntervalSeconds <= 0L ? 0L : autosaveIntervalSeconds * 20L;
+    }
+
+    private boolean hasAnySharedSyncFeatureEnabled() {
+        return cfgSharedHealth || cfgSharedHunger || cfgSharedAbsorption || cfgSharedPotions;
     }
 
     private void loadSharedData() {
